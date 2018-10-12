@@ -1,0 +1,252 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '2018 course lab 2 , VPC + two Subnet + Bastion EC2 & private EC2'
+
+# enviromnet
+Parameters:
+  KeyPair:
+    Type: String
+    Description: 'The EC2 KeyPair'
+    Default: ''
+
+Resources:
+  ##### network #####
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: '172.16.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: 'default'
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-vpc'
+
+
+  VPCDHCPOptions:
+    Type: "AWS::EC2::DHCPOptions"
+    Properties:
+      DomainName: !Sub '${AWS::Region}.compute.internal'
+      DomainNameServers:
+      - 'AmazonProvidedDNS'
+      NtpServers:
+      - '169.254.169.123'
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-vpc-dhcp-options'
+
+
+  VPCDHCPOptionsAssociation:
+    Type: "AWS::EC2::VPCDHCPOptionsAssociation"
+    Properties:
+      DhcpOptionsId: !Ref VPCDHCPOptions
+      VpcId: !Ref VPC
+
+
+  PublicSubnetA:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [ '0', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.10.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-a'
+      VpcId: !Ref 'VPC'
+
+
+  PrivateSubnetA:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [ '0', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.20.0/24'
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-a'
+      VpcId: !Ref 'VPC'
+
+
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-igw'
+
+
+  VPCGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      InternetGatewayId: !Ref 'InternetGateway'
+      VpcId: !Ref 'VPC'
+
+
+  NatEipA:
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: 'VPC'
+
+  NatGatewayA:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt 'NatEipA.AllocationId'
+      SubnetId: !Ref PublicSubnetA
+
+
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-rt'
+      VpcId: !Ref 'VPC'
+
+
+  PrivateRouteTableA:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-rt'
+      VpcId: !Ref 'VPC'
+
+
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref 'InternetGateway'
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref 'NatGatewayA'
+      RouteTableId: !Ref PrivateRouteTableA
+
+
+  PublicSubnetRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref 'PublicRouteTable'
+      SubnetId: !Ref 'PublicSubnetA'
+
+  PrivateSubnetARouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref 'PrivateRouteTableA'
+      SubnetId: !Ref 'PrivateSubnetA'
+
+
+
+  ##### ec2 & security group #####
+  BastionSSHSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'BastionSSHSecurityGroup'
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: !Sub '0.0.0.0/0'
+      - IpProtocol: 'icmp'
+        FromPort: -1
+        ToPort: -1
+        CidrIp: !Sub '0.0.0.0/0'
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-ssh'
+      VpcId: !Ref VPC
+
+
+  BastionEC2:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      AvailabilityZone: !Select [ '0', !GetAZs { Ref: 'AWS::Region' } ]
+      EbsOptimized: false
+      ImageId: 'ami-08847abae18baa040'
+      InstanceInitiatedShutdownBehavior: 'terminate'
+      InstanceType: 't2.micro'
+      KeyName: !Sub '${KeyPair}'
+      Monitoring: true
+      NetworkInterfaces:
+      - AssociatePublicIpAddress: true
+        DeviceIndex: "0"
+        GroupSet:
+        - Ref: BastionSSHSecurityGroup
+        SubnetId: !Ref PublicSubnetA
+        DeleteOnTermination: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-demo-bastion-ec2'
+      UserData:
+        'Fn::Base64': !Sub |
+          #!/bin/bash -x
+          sudo yum update -y
+
+
+  ##### private ec2 & security group #####
+  PrivateEC2SSHSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'PrivateEC2SSHSecurityGroup'
+      SecurityGroupIngress:
+      - IpProtocol: 'tcp'
+        FromPort: '22'
+        ToPort: '22'
+        SourceSecurityGroupId:
+          Ref: BastionSSHSecurityGroup
+      - IpProtocol: 'icmp'
+        FromPort: -1
+        ToPort: -1
+        SourceSecurityGroupId:
+          Ref: BastionSSHSecurityGroup
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-ssh'
+      VpcId: !Ref VPC
+
+
+  PrivateEC2:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      AvailabilityZone: !Select [ '0', !GetAZs { Ref: 'AWS::Region' } ]
+      EbsOptimized: false
+      ImageId: 'ami-08847abae18baa040'
+      InstanceInitiatedShutdownBehavior: 'terminate'
+      InstanceType: 't2.micro'
+      KeyName: !Sub '${KeyPair}'
+      Monitoring: true
+      NetworkInterfaces:
+      - AssociatePublicIpAddress: false
+        DeviceIndex: "0"
+        GroupSet:
+        - Ref: PrivateEC2SSHSecurityGroup
+        SubnetId: !Ref PrivateSubnetA
+        DeleteOnTermination: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-demo-private-ec2'
+      UserData:
+        'Fn::Base64': !Sub |
+          #!/bin/bash -x
+          sudo yum update -y
+
+
+Outputs:
+  BastionEC2PublicIp:
+    Value: !GetAtt BastionEC2.PublicIp
+    Export:
+      Name: !Sub '${AWS::StackName}-BastionEC2-PublicIp'
+
+  BastionEC2PrivateIp:
+    Value: !GetAtt BastionEC2.PrivateIp
+    Export:
+      Name: !Sub '${AWS::StackName}-BastionEC2-PrivateIp'
+
+  PrivateEC2PrivateIp:
+    Value: !GetAtt BastionEC2.PrivateIp
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateEC2-PrivateIp'

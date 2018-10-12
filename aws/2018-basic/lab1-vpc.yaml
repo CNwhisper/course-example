@@ -106,6 +106,10 @@ Resources:
         FromPort: 22
         ToPort: 22
         CidrIp: !Sub '0.0.0.0/0'
+      - IpProtocol: icmp
+        FromPort: -1
+        ToPort: -1
+        CidrIp: !Sub '0.0.0.0/0'
       Tags:
       - Key: Name
         Value: !Sub '${AWS::StackName}-ssh'
