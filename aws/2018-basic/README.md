@@ -16,11 +16,13 @@
   ```
   - 測試完畢，記得要刪掉 CloudFormation Stack
   
+
+- LAB 2-1 : [S3(CLI)](lab2-1-s3.yaml)  
+
   
-  
-- LAB 1 : [VPC + Two Subnet(public/private) + Two EC2(Bastion/private EC2)](lab2-vpc-2subnet.yaml) 
+- LAB 2-2 : [VPC + Two Subnet(public/private) + Two EC2(Bastion/private EC2)](lab2-2-vpc-2subnet.yaml) 
   - 請先到 EC2 建立 KeyPair ，並把 permission 改為 400 ， ，該 KeyPair 名稱用來建立 EC2 打 Key 用途
-  - 到 CloudFormation 用 [lab2-vpc-2subnet.yaml](lab2-vpc-2subnet.yaml) 檔案，建立一個 Stack 
+  - 到 CloudFormation 用 [lab2-vpc-2subnet.yaml](lab2-2-vpc-2subnet.yaml) 檔案，建立一個 Stack 
   - 到 CloudFormation Stack 的 Output 取得 PublicIP 或則到 EC2 裡查看
   - 連到該台主機
   ```bash

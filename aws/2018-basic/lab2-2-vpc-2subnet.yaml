@@ -1,6 +1,6 @@
 ---
 AWSTemplateFormatVersion: '2010-09-09'
-Description: '2018 course lab 2 , VPC + two Subnet + Bastion EC2 & private EC2'
+Description: '2018 course lab 2-2 , VPC + two Subnet + Bastion EC2 & private EC2'
 
 # enviromnet
 Parameters:
