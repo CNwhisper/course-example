@@ -5,19 +5,33 @@
   - 到 CloudFormation 用 [lab1-vpc.yaml](lab1-vpc.yaml) 檔案，建立一個 Stack 
   - 到 CloudFormation Stack 的 Output 取得 PublicIP 或則到 EC2 裡查看
   - 連到該台主機
-  ```bash
-  $ chmod 400 xxxx-xxxx-xxx.pem
-  $ ssh -i xxxx-xxxx-xxx.pem ec2-user@xxx.xxx.xxx.xxx
   
-  # 連進去後，試試連線
-  $ sudo yum update -y
-  $ ping 8.8.8.8
-  $ curl https://www.google.com
-  ```
+    ```bash
+    $ chmod 400 xxxx-xxxx-xxx.pem
+    $ ssh -i xxxx-xxxx-xxx.pem ec2-user@xxx.xxx.xxx.xxx
+    
+    # 連進去後，試試連線
+    $ sudo yum update -y
+    $ ping 8.8.8.8
+    $ curl https://www.google.com
+    ```
+    
   - 測試完畢，記得要刪掉 CloudFormation Stack
   
 
-- LAB 2-1 : [S3(CLI)](lab2-1-s3.yaml)  
+- LAB 2-1 : [S3(CLI)](lab2-1-s3.yaml) 
+  - 到 CloudFormation 用 [lab2-1-s3.yaml](lab2-1-s3.yaml)檔案，建立一個 stack , 並記住 bucket name 
+  - 到 CloudFormation Stack 的 Output 取得 Access Key 及 Access Secret Key 
+  - 將 Access Key 與 Access Secret Key 設定到 AWS CLI 裡
+  - 透過 AWS CLI 指令，進行 S3 檔案操作
+  
+    ```bash
+    $ echo 'this is a log file' >> my.log
+    $ aws s3 cp my.log s3://BUCKET
+    $ aws s3 ls s3://BUCKET
+    ```
+    
+  - 測試完畢，記得要刪掉 CloudFormation Stack
 
   
 - LAB 2-2 : [VPC + Two Subnet(public/private) + Two EC2(Bastion/private EC2)](lab2-2-vpc-2subnet.yaml) 
@@ -25,15 +39,17 @@
   - 到 CloudFormation 用 [lab2-vpc-2subnet.yaml](lab2-2-vpc-2subnet.yaml) 檔案，建立一個 Stack 
   - 到 CloudFormation Stack 的 Output 取得 PublicIP 或則到 EC2 裡查看
   - 連到該台主機
-  ```bash
-  $ chmod 400 xxxx-xxxx-xxx.pem
-  $ ssh -i xxxx-xxxx-xxx.pem ec2-user@xxx.xxx.xxx.xxx
   
-  # 連進去後，試試連線
-  $ sudo yum update -y
-  $ ping 8.8.8.8
-  $ curl https://www.google.com
-  ```
+    ```bash
+    $ chmod 400 xxxx-xxxx-xxx.pem
+    $ ssh -i xxxx-xxxx-xxx.pem ec2-user@xxx.xxx.xxx.xxx
+    
+    # 連進去後，試試連線
+    $ sudo yum update -y
+    $ ping 8.8.8.8
+    $ curl https://www.google.com
+    ```
+    
   - 進到 bastion 後，一樣到 CloudFormation Stack 的 Output 取得 Private  或則到 EC2 裡查看，用相同方式，連到第二台，並進行連線測試
     - 記得要把 key 傳到第一台裡，才能用該把 key 連到第二台
   
