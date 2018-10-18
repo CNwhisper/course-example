@@ -118,6 +118,9 @@ Resources:
 
   EC2:
     Type: "AWS::EC2::Instance"
+    DependsOn:
+      - VPCGatewayAttachment
+      - PublicSubnetA
     Properties:
       AvailabilityZone: !Select [ '0', !GetAZs { Ref: 'AWS::Region' } ]
       EbsOptimized: false
