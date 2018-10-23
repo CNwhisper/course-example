@@ -1,0 +1,537 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '2018 course lab 3-2 , VPC + four Subnet (multi-A-Z) + NLB + Asg + EC2 (Web)'
+
+# enviromnet
+Parameters:
+  BastionImageId:
+    Type: String
+    Description: 'The Bastion Image Id'
+    Default: 'ami-08847abae18baa040'
+
+  Ec2ImageId:
+    Type: String
+    Description: 'The Web Image Id'
+    Default: 'ami-08847abae18baa040'
+
+  KeyPair:
+    Type: String
+    Description: 'The EC2 KeyPair'
+    Default: ''
+
+  MaxSize:
+    Type: Number
+    Description: 'asg max instance size'
+    Default: 3
+
+  MinSize:
+    Type: Number
+    Description: 'asg min instance size'
+    Default: 1
+
+  DesiredCapacity:
+    Type: Number
+    Description: 'asg desired capacity'
+    Default: 1
+
+
+
+Resources:
+  ##### network #####
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: '172.16.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: 'default'
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-vpc'
+
+
+  VPCDHCPOptions:
+    Type: "AWS::EC2::DHCPOptions"
+    Properties:
+      DomainName: !Sub '${AWS::Region}.compute.internal'
+      DomainNameServers:
+      - 'AmazonProvidedDNS'
+      NtpServers:
+      - '169.254.169.123'
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-vpc-dhcp-options'
+
+
+  VPCDHCPOptionsAssociation:
+    Type: "AWS::EC2::VPCDHCPOptionsAssociation"
+    Properties:
+      DhcpOptionsId: !Ref VPCDHCPOptions
+      VpcId: !Ref VPC
+
+
+  PublicSubnetA:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [ '0', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.11.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-a'
+      VpcId: !Ref 'VPC'
+
+  PublicSubnetB:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [ '1', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.12.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-b'
+      VpcId: !Ref 'VPC'
+
+
+  PrivateSubnetA:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [ '0', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.21.0/24'
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-a'
+      VpcId: !Ref 'VPC'
+
+  PrivateSubnetB:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select [ '1', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.22.0/24'
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-b'
+      VpcId: !Ref 'VPC'
+
+
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-igw'
+
+  VPCGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      InternetGatewayId: !Ref 'InternetGateway'
+      VpcId: !Ref 'VPC'
+
+
+  NatEipA:
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: 'VPC'
+
+  NatEipB:
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: 'VPC'
+
+
+  NatGatewayA:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt 'NatEipA.AllocationId'
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-NatGatewayA'
+
+  NatGatewayB:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt 'NatEipB.AllocationId'
+      SubnetId: !Ref PublicSubnetB
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-NatGatewayB'
+
+
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-rt'
+      VpcId: !Ref 'VPC'
+
+
+  PrivateRouteTableA:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-rt-a'
+      VpcId: !Ref 'VPC'
+
+  PrivateRouteTableB:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-rt-b'
+      VpcId: !Ref 'VPC'
+
+
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref 'InternetGateway'
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteA:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref 'NatGatewayA'
+      RouteTableId: !Ref PrivateRouteTableA
+
+  PrivateRouteB:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref 'NatGatewayB'
+      RouteTableId: !Ref PrivateRouteTableB
+
+
+  PublicSubnetRouteTableAssociationA:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref 'PublicRouteTable'
+      SubnetId: !Ref 'PublicSubnetA'
+
+  PublicSubnetRouteTableAssociationB:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref 'PublicRouteTable'
+      SubnetId: !Ref 'PublicSubnetB'
+
+  PrivateSubnetARouteTableAssociationA:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref 'PrivateRouteTableA'
+      SubnetId: !Ref 'PrivateSubnetA'
+
+  PrivateSubnetARouteTableAssociationB:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref 'PrivateRouteTableB'
+      SubnetId: !Ref 'PrivateSubnetB'
+
+
+
+  ##### bastion  #####
+  BastionSSHSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'BastionSSHSecurityGroup'
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: !Sub '0.0.0.0/0'
+      - IpProtocol: 'icmp'
+        FromPort: -1
+        ToPort: -1
+        CidrIp: !Sub '0.0.0.0/0'
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-ssh'
+      VpcId: !Ref VPC
+
+
+  BastionEC2:
+    Type: "AWS::EC2::Instance"
+    DependsOn:
+      - VPCGatewayAttachment
+      - PublicSubnetA
+    Properties:
+      AvailabilityZone: !Select [ '1', !GetAZs { Ref: 'AWS::Region' } ]
+      EbsOptimized: false
+      ImageId: !Sub '${BastionImageId}'
+      InstanceInitiatedShutdownBehavior: 'terminate'
+      InstanceType: 't2.micro'
+      KeyName: !Sub '${KeyPair}'
+      Monitoring: true
+      NetworkInterfaces:
+      - AssociatePublicIpAddress: true
+        DeviceIndex: "0"
+        GroupSet:
+        - Ref: BastionSSHSecurityGroup
+        SubnetId: !Ref PublicSubnetB
+        DeleteOnTermination: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-demo-bastion-ec2'
+      UserData:
+        'Fn::Base64': !Sub |
+          #!/bin/bash -x
+          sudo yum update -y
+
+
+
+  ##### NLB #####
+#  NLBEip:
+#    Type: 'AWS::EC2::EIP'
+#    Properties:
+#      Domain: 'VPC'
+
+
+  NLBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'NLBSecurityGroup'
+      SecurityGroupIngress:
+      - IpProtocol: 'tcp'
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: '0.0.0.0/0'
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-web-public'
+      VpcId: !Ref VPC
+
+
+  NLBPrivateSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'NLBPrivateSecurityGroup'
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: '0.0.0.0/0'
+          # NLB is OSI layer 4 , forward the user real ip.
+#          SourceSecurityGroupId:
+#            Ref: NLBSecurityGroup
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-web-private'
+      VpcId: !Ref VPC
+
+
+  NetworkLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Type: 'network'
+      Name: !Sub '${AWS::StackName}-nlb'
+      Subnets:
+      - !Ref 'PublicSubnetA'
+      - !Ref 'PublicSubnetB'
+      Scheme: 'internet-facing'
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-NLB'
+
+
+  NLBListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      LoadBalancerArn: !Ref NetworkLoadBalancer
+      Port: 80
+      Protocol: TCP
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref NLBTargetGroup
+
+
+  NLBTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      Name: !Sub '${AWS::StackName}-nlb-web'
+      Port: 80
+      Protocol: TCP
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: '/'
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 6
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: 200-399
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: '15'
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-NLB-TG'
+
+
+
+  ##### ASG #####
+  Asg:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      Cooldown: '300'
+      HealthCheckGracePeriod: 300
+      # ALB or EC2 , start with EC2, confirm use ELB
+      HealthCheckType: 'EC2'
+      LaunchConfigurationName: !Ref LaunchConfig
+      TargetGroupARNs:
+        - !Ref NLBTargetGroup
+      MaxSize: !Sub '${MaxSize}'
+      MinSize: !Sub '${MinSize}'
+      DesiredCapacity: !Sub '${DesiredCapacity}'
+      MetricsCollection:
+      - Granularity: 1Minute
+#      NotificationConfigurations:
+#        !If
+#      - SNSStackCond
+#      - - NotificationTypes:
+#          # - 'autoscaling:EC2_INSTANCE_LAUNCH'
+#          # - 'autoscaling:EC2_INSTANCE_TERMINATE'
+#          - 'autoscaling:EC2_INSTANCE_LAUNCH_ERROR'
+#          - 'autoscaling:EC2_INSTANCE_TERMINATE_ERROR'
+#          TopicARN:
+#            'Fn::ImportValue': !Sub '${ParentStack}-${EnvType}-sns2slack'
+#      - !Ref 'AWS::NoValue'
+      # http://docs.aws.amazon.com/autoscaling/latest/userguide/as-instance-termination.html
+      TerminationPolicies:
+      - 'OldestInstance'
+      - 'Default'
+      VPCZoneIdentifier:
+      - !Ref 'PrivateSubnetA'
+      - !Ref 'PrivateSubnetB'
+      Tags:
+      - PropagateAtLaunch: true
+        Key: Name
+        Value: !Sub '${AWS::StackName}-Asg'
+
+  LaunchConfig:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Properties:
+      AssociatePublicIpAddress: false
+      IamInstanceProfile: !Ref InstanceProfile
+      ImageId: !Sub '${Ec2ImageId}'
+      InstanceMonitoring: true
+      InstanceType: 't2.micro'
+      KeyName: !Sub '${KeyPair}'
+      SecurityGroups:
+      - !Ref NLBPrivateSecurityGroup
+      - !Ref PrivateEC2SSHSecurityGroup
+      UserData:
+        'Fn::Base64': !Sub |
+          #!/bin/bash -x
+          ### system patch
+          sudo yum update -y
+          #### install code deploy agent
+          curl -O https://aws-codedeploy-ap-northeast-1.s3.amazonaws.com/latest/install
+          chmod +x ./install
+          sudo ./install auto
+          ### install apache & php
+          sudo yum -y install httpd php
+          sudo echo "<?php echo gethostname(); ?><br><hr><br><?php phpinfo(); ?>" > /var/www/html/index.php
+          sudo service httpd start
+          sudo chkconfig httpd on
+          sudo tee /var/www/html/pi.php <<EOF
+          <?php
+          \$pi = 4; \$top = 4; \$bot = 3; \$minus = TRUE;
+          \$accuracy = 10000000;
+          for(\$i = 0; \$i < \$accuracy; \$i++)
+          {
+            \$pi += ( \$minus ? -(\$top/\$bot) : (\$top/\$bot) );
+            \$minus = ( \$minus ? FALSE : TRUE);
+            \$bot += 2;
+          }
+          print "Pi ~=: " . \$pi;
+          ?>
+          EOF
+
+
+  InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: '/'
+      Roles:
+      - !Ref EC2Role
+
+  EC2Role:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Action: 'sts:AssumeRole'
+          Effect: 'Allow'
+          Principal:
+            Service: 'ec2.amazonaws.com'
+      Policies:
+      -
+        PolicyName: !Sub '${AWS::StackName}-CodeDeploy'
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+#          -
+#            Effect: 'Allow'
+#            Action:
+#            - 's3:GetObject'
+#            - 's3:GetObjectVersion'
+#            - 's3:ListBucket'
+#            Resource: 'arn:aws:s3:::noah-deploy/*'
+          -
+            Effect: 'Allow'
+            Action:
+            - 'autoscaling:DescribeAutoScalingGroups'
+            - 'autoscaling:DescribeAutoScalingInstances'
+            - 'autoscaling:SuspendProcesses'
+            - 'autoscaling:UpdateAutoScalingGroup'
+            - 'autoscaling:EnterStandby'
+            - 'autoscaling:ResumeProcesses'
+            - 'autoscaling:ExitStandby'
+            Resource: '*'
+
+
+
+  ##### bastion to web ec2, lab only #####
+  PrivateEC2SSHSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'PrivateEC2SSHSecurityGroup'
+      SecurityGroupIngress:
+      - IpProtocol: 'tcp'
+        FromPort: '22'
+        ToPort: '22'
+        SourceSecurityGroupId:
+          Ref: BastionSSHSecurityGroup
+      - IpProtocol: 'icmp'
+        FromPort: -1
+        ToPort: -1
+        SourceSecurityGroupId:
+          Ref: BastionSSHSecurityGroup
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-ssh'
+      VpcId: !Ref VPC
+
+
+Outputs:
+  BastionEC2PublicIp:
+    Value: !GetAtt BastionEC2.PublicIp
+    Export:
+      Name: !Sub '${AWS::StackName}-BastionEC2-PublicIp'
+
+  BastionEC2PrivateIp:
+    Value: !GetAtt BastionEC2.PrivateIp
+    Export:
+      Name: !Sub '${AWS::StackName}-BastionEC2-PrivateIp'
+
+  NLBUrl:
+    Value: !Sub http://${NetworkLoadBalancer.DNSName}
+    Export:
+      Name: !Sub '${AWS::StackName}-NLB-URL'
