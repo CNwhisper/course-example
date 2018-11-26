@@ -52,5 +52,20 @@
     
   - 進到 bastion 後，一樣到 CloudFormation Stack 的 Output 取得 Private  或則到 EC2 裡查看，用相同方式，連到第二台，並進行連線測試
     - 記得要把 key 傳到第一台裡，才能用該把 key 連到第二台
-  
   - 測試完畢，記得要刪掉 CloudFormation Stack  
+  
+ 
+- LAB 3-2: [VPC + Four Subnet(public/private, multi A-Z+ NLB+ASG+ Bastion)](lab3-2-vpc-4subnet-NLB-Asg.yaml)
+  - 到 Launch EC2 Instance，找到最新的 AMI Linux2 的 AMI-ID
+  - 到 EC2 產生 keyPair
+  - 到 CloudFormation 用 [lab3-2-vpc-4subnet-NLB-Asg.yaml](lab3-2-vpc-4subnet-NLB-Asg.yaml) 檔案，建立一個 Stack
+  - 到 CloudFormation 的 Output 或 ELB 頁簽，找到 ELB DNS 
+  - 透過 ELB DNS 連到 EC2
+  - 測試完畢，記得要刪掉 CloudFormation Stack
+   
+   
+- LAB 4 : [CI/CD](lab4-codedeploy.yaml)
+  - 基礎 infrastructure 同 [3-2](lab3-2-vpc-4subnet-NLB-Asg.yaml) 
+  - 到 CloudFormation 建 Stack，並從 Output 將 CodeDeploy Application 及 DeploymentGroup 名字放到 Git 專案
+  - 另在 CI 專案撰寫相關打包、驗證策略，Git 專案，可參考 https://github.com/noahxp/codedeploy
+  - 測試完畢，記得要刪掉 CloudFormation Stack
