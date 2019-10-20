@@ -144,12 +144,12 @@ Resources:
   NatEipA:
     Type: 'AWS::EC2::EIP'
     Properties:
-      Domain: 'VPC'
+      Domain: 'vpc'
 
   NatEipB:
     Type: 'AWS::EC2::EIP'
     Properties:
-      Domain: 'VPC'
+      Domain: 'vpc'
 
 
   NatGatewayA:
@@ -237,7 +237,7 @@ Resources:
       RouteTableId: !Ref 'PrivateRouteTableA'
       SubnetId: !Ref 'PrivateSubnetA'
 
-  PrivateSubnetARouteTableAssociationB:
+  PrivateSubnetBRouteTableAssociationB:
     Type: 'AWS::EC2::SubnetRouteTableAssociation'
     Properties:
       RouteTableId: !Ref 'PrivateRouteTableB'

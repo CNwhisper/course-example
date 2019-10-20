@@ -1,0 +1,380 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Fargate on ECS LAB , 3 public subnet , 3 private subnet '
+
+# enviromnet
+Parameters:
+  CreateNATGateway:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  CreateIamUser:
+    Type: String
+    Description: 'the user for push docker image to ecr'
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "Basic Configuration"
+        Parameters:
+          - CreateNATGateway
+          - CreateIamUser
+
+Conditions:
+  IsCreateNATGateway: !Equals [!Ref CreateNATGateway, 'true']
+  IsCreateIamUser: !Equals [!Ref CreateIamUser, 'true']
+
+
+Resources:
+  ##### network #####
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.16.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: 'default'
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-vpc'
+
+
+  VPCDHCPOptions:
+    Type: AWS::EC2::DHCPOptions
+    Properties:
+      DomainName: !Sub '${AWS::Region}.compute.internal'
+      DomainNameServers:
+      - AmazonProvidedDNS
+      NtpServers:
+      - 169.254.169.123
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-vpc-dhcp-options'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+
+
+  VPCDHCPOptionsAssociation:
+    Type: AWS::EC2::VPCDHCPOptionsAssociation
+    Properties:
+      DhcpOptionsId: !Ref VPCDHCPOptions
+      VpcId: !Ref VPC
+
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '0', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.11.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-a'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '1', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.12.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-b'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PublicSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '2', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.13.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-c'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '0', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.21.0/24'
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-a'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '1', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.22.0/24'
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-b'
+      VpcId: !Ref 'VPC'
+
+  PrivateSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '2', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.23.0/24'
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-c'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-igw'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref 'InternetGateway'
+      VpcId: !Ref 'VPC'
+
+
+  NatEipA:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: 'vpc'
+
+  NatEipB:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: 'vpc'
+
+  NatEipC:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: 'vpc'
+
+  NatGatewayA:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipA.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-NatGatewayA'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+
+  NatGatewayB:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipB.AllocationId
+      SubnetId: !Ref PublicSubnetB
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-NatGatewayB'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+
+  NatGatewayC:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipC.AllocationId
+      SubnetId: !Ref PublicSubnetC
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-NatGatewayC'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-rt'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PrivateRouteTableDefault:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-rt-default'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-rt-a'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PrivateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-rt-b'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PrivateRouteTableC:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-rt-c'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteA:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+      RouteTableId: !Ref PrivateRouteTableA
+
+  PrivateRouteB:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+      RouteTableId: !Ref PrivateRouteTableB
+
+  PrivateRouteC:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayC
+      RouteTableId: !Ref PrivateRouteTableC
+
+
+  PublicSubnetRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+
+  PublicSubnetRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetB
+
+  PublicSubnetRouteTableAssociationC:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetC
+
+
+  PrivateSubnetARouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !If [ IsCreateNATGateway, !Ref PrivateRouteTableA, !Ref PrivateRouteTableDefault ]
+      SubnetId: !Ref PrivateSubnetA
+
+  PrivateSubnetBRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !If [ IsCreateNATGateway, !Ref PrivateRouteTableB, !Ref PrivateRouteTableDefault ]
+      SubnetId: !Ref PrivateSubnetB
+
+  PrivateSubnetCRouteTableAssociationC:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !If [ IsCreateNATGateway, !Ref PrivateRouteTableC, !Ref PrivateRouteTableDefault ]
+      SubnetId: !Ref PrivateSubnetC
+
+
+
+  ##### iam user for push ECR #####
+  ECRUserGroup:
+    Condition: IsCreateIamUser
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Sub '${AWS::StackName}'
+
+  ECRUser:
+    Condition: IsCreateIamUser
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${AWS::StackName}-ecr'
+      Groups:
+      - !Ref ECRUserGroup
+      Path: '/'
+      Policies:
+        - PolicyName: 'login2ecr'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - 'ecr:GetAuthorizationToken'
+                Resource:
+                  - '*'
+        - PolicyName: 'push2ecr'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:InitiateLayerUpload'
+                  - 'ecr:UploadLayerPart'
+                  - 'ecr:CompleteLayerUpload'
+                  - 'ecr:PutImage'
+                Resource:
+                  - '*'

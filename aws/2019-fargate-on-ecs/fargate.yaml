@@ -1,0 +1,1154 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Fargate on ECS LAB , 3 public subnet , 3 private subnet , asg , fargate'
+
+# enviromnet
+Parameters:
+  CreateNATGateway:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  ProductName:
+    Type: String
+    Description: '(*)The Product Name.'
+    Default: ''
+
+  MaxSize:
+    Type: Number
+    Description: '(*)asg max instance size'
+    Default: 2
+
+  MinSize:
+    Type: Number
+    Description: '(*)asg min instance size'
+    Default: 1
+
+  DesiredCapacity:
+    Type: Number
+    Description: '(*)asg desired capacity'
+    Default: 1
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "Basic Configuration"
+        Parameters:
+          - CreateNATGateway
+          - ProductName
+      -
+        Label:
+          default: "AutoScaing Settings"
+        Parameters:
+          - MaxSize
+          - MinSize
+          - DesiredCapacity
+
+Conditions:
+  IsCreateNATGateway: !Equals [!Ref CreateNATGateway, 'true']
+
+Resources:
+  ##### network #####
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.16.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: 'default'
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-vpc'
+
+
+  VPCDHCPOptions:
+    Type: AWS::EC2::DHCPOptions
+    Properties:
+      DomainName: !Sub '${AWS::Region}.compute.internal'
+      DomainNameServers:
+      - AmazonProvidedDNS
+      NtpServers:
+      - 169.254.169.123
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-vpc-dhcp-options'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+
+
+  VPCDHCPOptionsAssociation:
+    Type: AWS::EC2::VPCDHCPOptionsAssociation
+    Properties:
+      DhcpOptionsId: !Ref VPCDHCPOptions
+      VpcId: !Ref VPC
+
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '0', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.11.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-a'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '1', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.12.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-b'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PublicSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '2', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.13.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-c'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '0', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.21.0/24'
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-a'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '1', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.22.0/24'
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-b'
+      VpcId: !Ref 'VPC'
+
+  PrivateSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ '2', !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: '172.16.23.0/24'
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-c'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-igw'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref 'InternetGateway'
+      VpcId: !Ref 'VPC'
+
+
+  NatEipA:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: 'vpc'
+
+  NatEipB:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: 'vpc'
+
+  NatEipC:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: 'vpc'
+
+  NatGatewayA:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipA.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-NatGatewayA'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+
+  NatGatewayB:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipB.AllocationId
+      SubnetId: !Ref PublicSubnetB
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-NatGatewayB'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+
+  NatGatewayC:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipC.AllocationId
+      SubnetId: !Ref PublicSubnetC
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-NatGatewayC'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-public-rt'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PrivateRouteTableDefault:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-rt-default'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-rt-a'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PrivateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-rt-b'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PrivateRouteTableC:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-private-rt-c'
+      - Key: CreatedBy
+        Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref 'VPC'
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteA:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+      RouteTableId: !Ref PrivateRouteTableA
+
+  PrivateRouteB:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+      RouteTableId: !Ref PrivateRouteTableB
+
+  PrivateRouteC:
+    Condition: IsCreateNATGateway
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayC
+      RouteTableId: !Ref PrivateRouteTableC
+
+
+  PublicSubnetRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+
+  PublicSubnetRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetB
+
+  PublicSubnetRouteTableAssociationC:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetC
+
+
+  PrivateSubnetARouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !If [ IsCreateNATGateway, !Ref PrivateRouteTableA, !Ref PrivateRouteTableDefault ]
+      SubnetId: !Ref PrivateSubnetA
+
+  PrivateSubnetBRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !If [ IsCreateNATGateway, !Ref PrivateRouteTableB, !Ref PrivateRouteTableDefault ]
+      SubnetId: !Ref PrivateSubnetB
+
+  PrivateSubnetCRouteTableAssociationC:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !If [ IsCreateNATGateway, !Ref PrivateRouteTableC, !Ref PrivateRouteTableDefault ]
+      SubnetId: !Ref PrivateSubnetC
+
+
+  ##### vpc endpoint & private link #####
+  S3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal: '*'
+            Action:
+              - 's3:*'
+            Resource: '*'
+      RouteTableIds:
+        - !Ref PrivateRouteTableDefault
+      VpcId: !Ref VPC
+
+  EcrDkrPrivateLink:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr'
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref PrivateLinkSg
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+        - !Ref PrivateSubnetC
+      VpcId: !Ref VPC
+
+  LogsPrivateLink:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal: '*'
+            Action:
+            - 'logs:*'
+            Resource: '*'
+      SecurityGroupIds:
+        - !Ref PrivateLinkSg
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+        - !Ref PrivateSubnetC
+      VpcId: !Ref VPC
+
+  PrivateLinkSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${ProductName}-PrivateLinkSg'
+      GroupDescription: 'allow traffice over private-link to aws services'
+      SecurityGroupIngress:
+        - IpProtocol: '-1'
+          FromPort: -1
+          ToPort: -1
+          CidrIp: '172.16.21.0/24'
+        - IpProtocol: '-1'
+          FromPort: -1
+          ToPort: -1
+          CidrIp: '172.16.22.0/24'
+        - IpProtocol: '-1'
+          FromPort: -1
+          ToPort: -1
+          CidrIp: '172.16.23.0/24'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-sg'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref VPC
+
+
+
+  ##### ECR , ECS #####
+  ECRNginx:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${ProductName}-nginx'
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+            {
+              "rulePriority": 1,
+              "description": "Only keep latest 100 images",
+              "selection": {
+                "tagStatus": "any",
+                "countType": "imageCountMoreThan",
+                "countNumber": 100
+              },
+              "action": { "type": "expire" }
+            }]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ecr'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+  ECRTomcat:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${ProductName}-tomcat'
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+            {
+              "rulePriority": 1,
+              "description": "Only keep latest 100 images",
+              "selection": {
+                "tagStatus": "any",
+                "countType": "imageCountMoreThan",
+                "countNumber": 100
+              },
+              "action": { "type": "expire" }
+            }]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-tomcat'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+  ECS:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${ProductName}'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ecs'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+  # A role needed by ECS
+  ContainerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProductName}-EcsExecutionRole'
+      Description: !Sub 'CreatedBy cfn-${AWS::StackName} ,A role needed by ECS'
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: 'sts:AssumeRole'
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ContainerExecutionRole'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+
+  # A role for the containers ,for tomcat service
+  TomcatContainerTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProductName}-TomcatContainerTaskRole'
+      Description: !Sub 'CreatedBy cfn-${AWS::StackName} ,A role for the containers(task)'
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: 'sts:AssumeRole'
+            Principal:
+                Service: ecs-tasks.amazonaws.com
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess'
+      Policies:
+        - PolicyName: 'sns'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: 'Allow'
+              Resource: '*'
+              Action:
+                - 'SNS:ListTopics'
+                - 'SNS:Publish'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-TomcatContainerTaskRole'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+
+  # nginx server task definition
+  NginxTaskDefinition:
+    # DependsOn: ContainerExecutionRole
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities:
+        - FARGATE
+      Family: !Sub '${ProductName}-nginx'
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !GetAtt ContainerExecutionRole.Arn
+      # TaskRoleArn: !GetAtt NginxContainerTaskRole.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-NginxTaskDefinition'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+      ContainerDefinitions:
+        -
+          Name: 'nginx'
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProductName}-nginx:latest"
+          PortMappings:
+            -
+              ContainerPort: 80
+              HostPort: 80
+              Protocol: tcp
+          StartTimeout: 60
+          StopTimeout: 30
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref NginxCloudWatchLogGroup
+              awslogs-region: !Sub '${AWS::Region}'
+              awslogs-stream-prefix: 'ecs'
+
+  # nginx fargate service
+  NginxFargateService:
+    DependsOn:
+      - ALB
+      - ALBTgNginx
+      - ALBListener
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ECS
+      LaunchType: FARGATE
+      TaskDefinition: !Ref NginxTaskDefinition
+      DesiredCount: !Sub '${DesiredCapacity}'
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      LoadBalancers:
+        - ContainerName: nginx
+          ContainerPort: 80
+          TargetGroupArn: !Ref ALBTgNginx
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref NginxECSServiceSecurityGroup
+          Subnets:
+            - !Ref PrivateSubnetA
+            - !Ref PrivateSubnetB
+            - !Ref PrivateSubnetC
+      SchedulingStrategy: REPLICA
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-NginxFargateService'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+  NginxECSServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${ProductName}-NginxSG'
+      GroupDescription: 'allow traffice to fargate'
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProductName}-nginx-sg'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref VPC
+
+  # nginx cloud watch log
+  NginxCloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProductName}-nginx'
+      RetentionInDays: 365
+
+  TomcatFargateTaskDefinition:
+    # DependsOn: ContainerExecutionRole
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities:
+        - FARGATE
+      Family: !Sub '${ProductName}-tomcat'
+      Cpu: '512'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !GetAtt ContainerExecutionRole.Arn
+      TaskRoleArn: !GetAtt TomcatContainerTaskRole.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProductName}-TomcatFargateTaskDefinition'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+      ContainerDefinitions:
+        -
+          Name: 'tomcat'
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProductName}-tomcat:latest"
+          PortMappings:
+            -
+              ContainerPort: 8080
+              HostPort: 8080
+              Protocol: tcp
+          StartTimeout: 180
+          StopTimeout: 120
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref TomcatCloudWatchLogGroup
+              awslogs-region: !Sub '${AWS::Region}'
+              awslogs-stream-prefix: 'ecs'
+
+  # tomcat fargate service
+  TomcatFargateService:
+    DependsOn:
+      - ALB
+      - ALBTgTomcat
+      - ListenerRuleTomcat
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ECS
+      LaunchType: FARGATE
+      TaskDefinition: !Ref TomcatFargateTaskDefinition
+      DesiredCount: !Sub '${DesiredCapacity}'
+      HealthCheckGracePeriodSeconds: 180
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      LoadBalancers:
+        - ContainerName: tomcat
+          ContainerPort: 8080
+          TargetGroupArn: !Ref ALBTgTomcat
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref TomcatECSServiceSecurityGroup
+          Subnets:
+            - !Ref PrivateSubnetA
+            - !Ref PrivateSubnetB
+            - !Ref PrivateSubnetC
+      SchedulingStrategy: REPLICA
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProductName}-TomcatFargateTaskDefinition'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+  TomcatECSServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${ProductName}-TomcatSG'
+      GroupDescription: 'allow traffice to fargate'
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: '0.0.0.0/0'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProductName}-tomcat-sg'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref VPC
+
+ # tomcat cloud watch log
+  TomcatCloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProductName}-tomcat'
+      RetentionInDays: 365
+
+
+  ##### load balancer  #####
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${ProductName}-AlbSg'
+      GroupDescription: 'allow traffic to alb'
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/8'
+        - IpProtocol: 'tcp'
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/8'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProductName}-alb-sg'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+      VpcId: !Ref VPC
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+        - !Ref PublicSubnetC
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Scheme: internet-facing
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProductName}-alb'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+  # default (nginx) listener
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref ALBTgNginx
+
+  # tomcat listener
+  ListenerRuleTomcat:
+    DependsOn: ALBTgTomcat
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTgTomcat
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - '/apis/*'
+      ListenerArn: !Ref ALBListener
+      Priority: 1
+
+  ALBTgNginx:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      # Name: !Sub '${ProductName}-fe-Tg'
+      HealthCheckPath: '/'
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: 200-499
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '15'
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProductName}-alb-tg-nginx'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+  ALBTgTomcat:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: '/apis/'
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: 200-499
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '15'
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProductName}-alb-tg-tomcat'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+
+
+
+  #### asg #####
+  ECSAsgRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProductName}-ecs-asg'
+      Description: !Sub 'CreatedBy cfn-${AWS::StackName} ,ecs asg role'
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole'
+      Tags:
+        - Key: Name104
+          Value: !Sub '${ProductName}-ecs-asg-role'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+  TomcatAsgTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Sub '${MaxSize}'
+      MinCapacity: !Sub '${MinSize}'
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Join ['/', [service, !Ref ECS, !GetAtt TomcatFargateService.Name]]
+      RoleARN: !GetAtt ECSAsgRole.Arn
+      ScheduledActions:
+        - ScheduledActionName: 'startup'
+          ScalableTargetAction:
+            MaxCapacity: 1
+            MinCapacity: 1
+          Schedule: cron(30 0 ? * MON-FRI *)
+        - ScheduledActionName: 'shutdown'
+          ScalableTargetAction:
+            MaxCapacity: 0
+            MinCapacity: 0
+          Schedule: cron(00 11 ? * MON-FRI *)
+
+  TomcatAsgScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${ProductName}-tomcat-asg-policy'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref TomcatAsgTarget
+      TargetTrackingScalingPolicyConfiguration:
+        DisableScaleIn: false
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 300
+        # Keep things at or lower than 50% CPU utilization
+        TargetValue: 50
+
+  NginxAsgTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Sub '${MaxSize}'
+      MinCapacity: !Sub '${MinSize}'
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Join ['/', [service, !Ref ECS, !GetAtt NginxFargateService.Name]]
+      RoleARN: !GetAtt ECSAsgRole.Arn
+      ScheduledActions:
+        - ScheduledActionName: 'startup'
+          ScalableTargetAction:
+            MaxCapacity: 1
+            MinCapacity: 1
+          Schedule: cron(30 0 ? * MON-FRI *)
+        - ScheduledActionName: 'shutdown'
+          ScalableTargetAction:
+            MaxCapacity: 0
+            MinCapacity: 0
+          Schedule: cron(00 11 ? * MON-FRI *)
+
+  NginxAsgScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${ProductName}-nginx-asg-policy'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref NginxAsgTarget
+      TargetTrackingScalingPolicyConfiguration:
+        DisableScaleIn: false
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 300
+        # Keep things at or lower than 50% CPU utilization
+        TargetValue: 50
+
+
+  ##### iam user for push ECR #####
+  ECRUserGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Sub '${AWS::StackName}-${ProductName}'
+
+  ECRUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${AWS::StackName}-ecr'
+      Groups:
+      - !Ref ECRUserGroup
+      Path: '/'
+      Policies:
+        - PolicyName: 'login2ecr'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - 'ecr:GetAuthorizationToken'
+                Resource:
+                  - '*'
+        - PolicyName: 'push2ecr'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:InitiateLayerUpload'
+                  - 'ecr:UploadLayerPart'
+                  - 'ecr:CompleteLayerUpload'
+                  - 'ecr:PutImage'
+                Resource:
+                  - !GetAtt ECRNginx.Arn
+                  - !GetAtt ECRTomcat.Arn
+
+
+
+  ##### sns #####
+  sns2SlackTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: 'sns to slack topic'
+      Subscription:
+      - Endpoint: !GetAtt sns2slackFunction.Arn
+        Protocol: 'lambda'
+
+  snsLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt sns2slackFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref sns2SlackTopic
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: !Sub 'CreatedBy cfn-${AWS::StackName} , Lambda execution role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Action: 'sts:AssumeRole'
+          Effect: 'Allow'
+          Principal:
+            Service: 'lambda.amazonaws.com'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-LambdaExecutionRole'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+  sns2slackFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: 'sns to slack'
+      Environment:
+        Variables:
+          WEB_HOOK_PATH: '/services/XXXXXX/XXXXXX/XXXXXXXXX'
+          CHANNEL: '#aws-lab-fargateonecs'
+      Runtime: 'nodejs8.10'
+      Handler: 'index.handler'
+      MemorySize: 128
+      Timeout: 5
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-sns2slackFunction'
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+      Code:
+        ZipFile: >-
+          'use strict';
+
+          var https = require('https');
+
+          let SLACK_WEB_HOOK_URL = process.env.WEB_HOOK_PATH;
+          let channelPrefix = '#' + process.env.CHANNEL;
+
+          exports.handler = function(event, context) {
+            let text = "";
+            let preText = "";
+            let message = "";
+            let date = null;
+            if (typeof event === "undefined" || typeof event.Records === "undefined" || typeof event.Records[0].Sns === "undefined"){
+              message = JSON.stringify(context);
+            } else {
+              preText = event.Records[0].Sns.Subject;
+              message = event.Records[0].Sns.Message;
+              if (event.Records[0].Sns.Timestamp)
+                date = new Date(event.Records[0].Sns.Timestamp).getTime()/1000;
+            }
+
+            let color = getColor(message);
+            let channel = channelPrefix;
+            /*
+            switch (color){
+              case 'danger':
+                channel += 'error';
+              break;
+              case 'warning':
+                channel += 'warn';
+              break;
+              default:
+                channel += 'info';
+            }
+            */
+            try{
+              message = JSON.stringify(JSON.parse(message),null,2);
+            }catch(error){}
+
+            let postData = {
+              "username": "AWS SNS",
+              "channel": channel,
+              "text": text
+            };
+            postData.attachments = [
+              {
+                "color": color,
+                "pretext": preText,
+                "text": message,
+                "ts": date
+              }
+            ];
+
+            let options = {
+              method: 'POST',
+              hostname: 'hooks.slack.com',
+              port: 443,
+              path: SLACK_WEB_HOOK_URL
+            };
+
+            let req = https.request(options, (res) => {
+              res.setEncoding('utf-8');
+              res.on('data', (data) => {
+                console.log('http-request-body=',data);
+                context.succeed();
+              });
+            });
+            req.on('error', (e) => {
+              console.log('problem with request:' , e.message);
+            });
+            req.write(JSON.stringify(postData));
+            req.end();
+
+          };
+
+
+          function getColor(message){
+            let color = "good";
+            message = JSON.stringify(message).toLowerCase();
+
+            let dangerMessages = [
+              "exception" ,"error" ,"aborted" ,"failed" ,"not authorized" ,"unsuccessful" ,"do not have permission"
+            ];
+            let warningMessages = [
+              "warning" , "pending" ,"removed" ,"rollback" ,"delete" ,"adding instance"
+            ];
+
+            for(let item in dangerMessages) {
+              if (message.indexOf(dangerMessages[item])>=0){
+                color = "danger";
+                break;
+              }
+            }
+            if (color === "good") {
+              for(let item in warningMessages) {
+                if (message.indexOf(warningMessages[item])>=0){
+                  color = "warning";
+                  break;
+                }
+              }
+            }
+            return color;
+          }
