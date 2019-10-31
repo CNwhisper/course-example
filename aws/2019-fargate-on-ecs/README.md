@@ -5,10 +5,10 @@
 * [AWS](#aws)
 * [AWS Cloud9](#cloud9)
 * [Example files](#files)
-
+* [補充](#memo)
 ---
 
-為確保能完成workshop練習，請先在電腦安裝好相關軟體工具
+課前:為確保能完成workshop練習，請先在電腦安裝好相關軟體工具
 ---
 
 <h2 id="git">Git</h2>
@@ -47,6 +47,11 @@
 - cloud9 設定
   AWS Cloud9 > Preferences > AWS SETTINGS > 關閉「AWS managed temporary credentials 」
 
+---
+
+補充:
+---
+
 <h2 id="files">Example files</h2>
 
 - [vpc](basic-vpc.yaml) : 基礎網路環境暨 ECR 用的 User 所需的 Cloudformation template
@@ -57,3 +62,14 @@
   - Ecs cluster
   - Fargate for ALB Root & context path(/apis)
 
+<h2 id="memo">補充</h2>
+
+- remove exited container
+```
+docker rm $(docker ps -f="status=exited" -aq)
+docker rm $(docker ps -f="status=created" -aq)
+```
+- remove dangling images
+```
+docker rmi $(docker images -f="dangling=true" -q)
+```
