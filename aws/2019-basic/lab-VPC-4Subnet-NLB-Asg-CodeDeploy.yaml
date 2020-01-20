@@ -1,7 +1,7 @@
 ---
 # validate : 1. lint for editor (cfn-lint) , 2.aws cloudformation validate-template --template-body file://xxx.yaml
 AWSTemplateFormatVersion: 2010-09-09
-Description: 2018 course lab 3-2 , VPC + four Subnet (multi-A-Z) + NLB + Asg + EC2 (Web) + Bastion
+Description: 2019 course , VPC + four Subnet (multi-A-Z) + NLB + Asg + EC2 (Web) + Bastion
 
 # enviromnet
 Parameters:
