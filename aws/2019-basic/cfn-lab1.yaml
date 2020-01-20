@@ -1,0 +1,79 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: VPC + public subnet
+
+
+Resources:
+  ##### network #####
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.16.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-vpc
+
+
+  VPCDHCPOptions:
+    Type: AWS::EC2::DHCPOptions
+    Properties:
+      DomainName: !Sub ${AWS::Region}.compute.internal
+      DomainNameServers:
+      - AmazonProvidedDNS
+      NtpServers:
+      - 169.254.169.123
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-vpc-dhcp-options
+
+
+  VPCDHCPOptionsAssociation:
+    Type: AWS::EC2::VPCDHCPOptionsAssociation
+    Properties:
+      DhcpOptionsId: !Ref VPCDHCPOptions
+      VpcId: !Ref VPC
+
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 0, !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: 172.16.11.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-public-a
+      VpcId: !Ref VPC
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 1, !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: 172.16.12.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-public-b
+      VpcId: !Ref VPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-igw
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+Outputs:
+  VPCCIDR:
+    Value: !GetAtt VPC.CidrBlock
+    Export:
+      Name: !Sub ${AWS::StackName}-VPCCIDR

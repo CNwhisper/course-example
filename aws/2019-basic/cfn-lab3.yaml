@@ -1,0 +1,984 @@
+---
+# validate : 1. lint for editor (cfn-lint) , 2.aws cloudformation validate-template --template-body file://xxx.yaml
+AWSTemplateFormatVersion: 2010-09-09
+Description: 2018 course lab 3-2 , VPC + four Subnet (multi-A-Z) + NLB + Asg + EC2 (Web) + Bastion
+
+# enviromnet
+Parameters:
+  BastionImageId:
+    Type: String
+    Description: The Bastion AMI ,If there is content, resources will be created
+    Default: ''
+
+  Ec2ImageId:
+    Type: AWS::EC2::Image::Id
+    Description: (*)The Web Image Id
+    Default: 104-is-a-good-company
+
+  KeyPair:
+    Type: String
+    Description: The EC2 KeyPair, If there has content,it will attached to EC2
+    Default: ''
+
+  MaxSize:
+    Type: Number
+    Description: (*)asg max instance size
+    Default: a
+
+  MinSize:
+    Type: Number
+    Description: (*)asg min instance size
+    Default: b
+
+  DesiredCapacity:
+    Type: Number
+    Description: (*)asg desired capacity
+    Default: c
+
+  S3Bucket:
+    Type: String
+    Description: (*)s3 bucket for travis-ci upload , and codedeploy download
+    Default: ''
+
+  SNSMail:
+    Type: String
+    Description: (*)the mail receive the sns notification
+    Default: ''
+
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: ELB+ASG
+        Parameters:
+          - Ec2ImageId
+          - KeyPair
+          - MaxSize
+          - MinSize
+          - DesiredCapacity
+          - SNSMail
+      -
+        Label:
+          default: Bastion
+        Parameters:
+          - BastionImageId
+    # ParameterLabels:
+    #   BastionImageId:
+    #     default: "Which Bastion Server should this be deployed to?"
+
+Conditions:
+  BastionCond: !Not [ !Equals [ !Ref BastionImageId, '' ] ]
+  KeyPairCond: !Not [ !Equals [ !Ref KeyPair, '' ] ]
+
+
+
+Resources:
+  ##### network #####
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 0.0.0.0/0
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-vpc
+
+
+  VPCDHCPOptions:
+    Type: AWS::EC2::DHCPOptions
+    Properties:
+      DomainName: !Sub ${AWS::Region}.compute.internal
+      DomainNameServers:
+      - AmazonProvidedDNS
+      NtpServers:
+      - 169.254.169.123
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-vpc-dhcp-options
+
+
+  VPCDHCPOptionsAssociation:
+    Type: AWS::EC2::VPCDHCPOptionsAssociation
+    Properties:
+      DhcpOptionsId: !Ref VPCDHCPOptions
+      VpcId: !Ref VPC
+
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 0, !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: 172.16.11.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-public-a
+      VpcId: !GetAtt MyVPC
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 1, !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: 172.16.12.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-public-b
+      VpcId: !Ref VPC
+
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 0, !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: 172.16.21.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-private-a
+      VpcId: !Ref VPC
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 1, !GetAZs { Ref: 'AWS::Region' } ]
+      CidrBlock: 172.16.22.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-private-b
+      VpcId: !Ref VPC
+
+  NatEipA:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatEipB:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipA.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-NatGatewayA
+
+  NatGatewayB:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipB.AllocationId
+      SubnetId: !Ref PublicSubnetB
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-NatGatewayB
+
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-public-rt
+      VpcId: !Ref VPC
+
+
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTables
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-private-rt-a
+      VpcId: !Ref VPC
+
+  PrivateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-private-rt-b
+      VpcId: !Ref VPC
+
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteA:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+      RouteTableId: !Ref PrivateRouteTableA
+
+  PrivateRouteB:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+      RouteTableId: !Ref PrivateRouteTableB
+
+
+  PublicSubnetRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+
+  PublicSubnetRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetB
+
+  PrivateSubnetARouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      SubnetId: !Ref PrivateSubnetA
+
+  PrivateSubnetBRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB
+      SubnetId: !Ref PrivateSubnetB
+
+
+
+  #####  vpc endpoint  #####
+  S3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal: '*'
+          Action:
+          - 's3:*'
+          Resource: '*'
+      RouteTableIds:
+      - !Ref PrivateRouteTableA
+      - !Ref PrivateRouteTableB
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcId: !Ref VPC
+
+  DynamicDBVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal: '*'
+          Action:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:BatchGetItem
+          - dynamodb:DeleteGetItem
+          - dynamodb:Query
+          Resource:
+          - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/*'
+      RouteTableIds:
+      - !Ref PrivateRouteTableA
+      - !Ref PrivateRouteTableB
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.dynamodb'
+      VpcId: !Ref VPC
+
+
+  ##### bastion  #####
+  BastionSSHSecurityGroup:
+    Condition: BastionCond
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: BastionSSHSecurityGroup
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: icmp
+        FromPort: -1
+        ToPort: -1
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-ssh
+      VpcId: !Ref VPC
+
+
+  # bastion to web ec2 #
+  PrivateEC2SSHSecurityGroup:
+    Condition: BastionCond
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PrivateEC2SSHSecurityGroup
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        SourceSecurityGroupId:
+          Ref: BastionSSHSecurityGroup
+      - IpProtocol: icmp
+        FromPort: -1
+        ToPort: -1
+        SourceSecurityGroupId:
+          Ref: BastionSSHSecurityGroup
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-ssh
+      VpcId: !Ref VPC
+
+
+  BastionEC2:
+    Condition: BastionCond
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - VPCGatewayAttachment
+      - NatGatewayA
+      - NatGatewayB
+    Properties:
+      AvailabilityZone: !Select [ 1, !GetAZs { Ref: 'AWS::Region' } ]
+      ImageId: !Sub ${BastionImageId}
+      InstanceInitiatedShutdownBehavior: terminate
+      InstanceType: t2.micro
+      KeyName: !If [KeyPairCond, !Ref KeyPair, !Ref 'AWS::NoValue']
+      Monitoring: true
+      NetworkInterfaces:
+      - AssociatePublicIpAddress: true
+        DeviceIndex: '0'
+        GroupSet:
+        - Ref: BastionSSHSecurityGroup
+        SubnetId: !Ref PublicSubnetB
+        DeleteOnTermination: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-bastion
+      UserData:
+        'Fn::Base64': !Sub
+        - |
+          #!/bin/bash -x
+          sudo yum update -y
+          ${command}
+        - {
+            command : 'echo hi'
+          }
+
+
+
+  ##### ALB #####
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALBSecurityGroup
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-web-public
+      VpcId: !Ref VPC
+
+
+  ALBPrivateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALBPublicToPrivateSecurityGroup
+      SecurityGroupIngress:
+        # NLB is OSI layer 4 , forward the client ip. ALB is OSI Layer 7 , x-forward-for the client ip
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          # CidrIp: 0.0.0.0/0
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-web-private
+      VpcId: !Ref VPC
+
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - !Ref PublicSubnetA
+      - !Ref PublicSubnetB
+      SecurityGroups:
+      - !Ref ALBSecurityGroup
+      Scheme: internet-facing
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-ALB
+
+
+  ApplicationLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref ApplicationLoadBalancerTargetGroup
+
+  LambdaListener:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref LambdaTargateGroup
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - '/lambda'
+      ListenerArn: !Ref ApplicationLoadBalancerListener
+      Priority: 1
+
+  ApplicationLoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: '/monitor.php'
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: 200-299
+      Port: 80
+      Protocol: HTTP
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: '15'
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-ALB-TG'
+
+
+
+  ##### ASG #####
+  Asg:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - VPCGatewayAttachment
+      - NatGatewayA
+      - NatGatewayB
+    Properties:
+      Cooldown: '300'
+      HealthCheckGracePeriod: 300
+      # ALB or EC2 , start with EC2, final with ELB
+      HealthCheckType: EC2
+      LaunchConfigurationName: !Ref LaunchConfig
+      TargetGroupARNs:
+        - !Ref ApplicationLoadBalancerTargetGroup
+      MaxSize: !Sub '${MaxSize}'
+      MinSize: !Sub '${MinSize}'
+      DesiredCapacity: !Sub '${DesiredCapacity}'
+      MetricsCollection:
+        - Granularity: 1Minute
+      NotificationConfigurations:
+        - NotificationTypes:
+          - autoscaling:EC2_INSTANCE_LAUNCH
+          - autoscaling:EC2_INSTANCE_TERMINATE
+          - autoscaling:EC2_INSTANCE_LAUNCH_ERROR
+          - autoscaling:EC2_INSTANCE_TERMINATE_ERROR
+          TopicARN: !Ref sns2mail
+      TerminationPolicies:
+        - OldestInstance
+        - Default
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      Tags:
+        - PropagateAtLaunch: true
+          Key: Name
+          Value: !Sub '${AWS::StackName}-Asg'
+
+
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      AssociatePublicIpAddress: false
+      IamInstanceProfile: !Ref InstanceProfile
+      ImageId: !Sub ${Ec2ImageId}
+      InstanceMonitoring: true
+      InstanceType: t2.micro
+      KeyName: !If [KeyPairCond, !Ref KeyPair, !Ref 'AWS::NoValue']
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp2
+            # Iops: 100
+      SecurityGroups:
+      - !Ref ALBPrivateSecurityGroup
+      - !If
+        - BastionCond
+        - !Ref PrivateEC2SSHSecurityGroup
+        - !Ref 'AWS::NoValue'
+      UserData:
+        'Fn::Base64': !Sub |
+          #!/bin/bash -x
+          ### system patch
+          sudo yum update -y
+          #### install ruby (for code-deploy agent )
+          sudo yum install -y ruby
+          #### install code deploy agent
+          curl -O https://aws-codedeploy-${AWS::Region}.s3.amazonaws.com/latest/install
+          chmod +x ./install
+          sudo ./install auto
+          ### install apache & php
+          sudo yum -y install httpd php
+          sudo echo "<?php echo gethostname(); ?><br><hr><br><?php phpinfo(); ?>" > /var/www/html/index.php
+          sudo echo "<?php echo 'ok' ?>" > /var/www/html/monitor.php
+          sudo service httpd start
+          sudo chkconfig httpd on
+          sudo tee /var/www/html/pi.php <<EOF
+          <?php
+          \$pi = 4; \$top = 4; \$bot = 3; \$minus = TRUE;
+          \$accuracy = 10000000;
+          for(\$i = 0; \$i < \$accuracy; \$i++)
+          {
+            \$pi += ( \$minus ? -(\$top/\$bot) : (\$top/\$bot) );
+            \$minus = ( \$minus ? FALSE : TRUE);
+            \$bot += 2;
+          }
+          print "Pi ~=: " . \$pi;
+          ?>
+          EOF
+
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+      - !Ref EC2Role
+
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+      Policies:
+      -
+        PolicyName: !Sub ${AWS::StackName}-CodeDeploy
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          -
+            Effect: Allow
+            Action:
+            - autoscaling:DescribeAutoScalingGroups
+            - autoscaling:DescribeAutoScalingInstances
+            - autoscaling:SuspendProcesses
+            - autoscaling:UpdateAutoScalingGroup
+            - autoscaling:EnterStandby
+            - autoscaling:ResumeProcesses
+            - autoscaling:ExitStandby
+            Resource: '*'
+      -
+        PolicyName: !Sub ${AWS::StackName}-GetDeploySource
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          -
+            Effect: Allow
+            Action:
+            - s3:Get*
+            - s3:List*
+            Resource: !Sub arn:aws:s3:::${S3Bucket}/*
+
+
+  #### asg policy #####
+  StepScalingOut:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref Asg
+      PolicyType: StepScaling
+      MetricAggregationType: Average
+      EstimatedInstanceWarmup: 120
+      StepAdjustments:
+      # CPUAlarmHigh.Threshold + MetricIntervalLowerBound ~ CPUAlarmHigh.Threshold + MetricIntervalUpperBound (70~90)
+      - MetricIntervalLowerBound: 0
+        MetricIntervalUpperBound: 20
+        ScalingAdjustment: 1
+      # CPUAlarmHigh.Threshold + MetricIntervalLowerBound (>90)
+      - MetricIntervalLowerBound: 20
+        ScalingAdjustment: 2
+
+  StepScalingIn:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref Asg
+      PolicyType: StepScaling
+      MetricAggregationType: Average
+      EstimatedInstanceWarmup: 120
+      StepAdjustments:
+      # CPUAlarmLow.Threshold - MetricIntervalUpperBound = value
+      - MetricIntervalUpperBound: 0
+        ScalingAdjustment: -1
+
+
+  # CPU Alarm #
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      EvaluationPeriods: 1
+      Statistic: Average
+      Threshold: 70
+      AlarmDescription: Alarm if CPU too high or metric disappears indicating instance is down
+      Period: '180'
+      AlarmActions:
+        - !Ref StepScalingOut
+      Namespace: AWS/EC2
+      Dimensions:
+      - Name: AutoScalingGroupName
+        Value: !Ref Asg
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      MetricName: CPUUtilization
+
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      EvaluationPeriods: 1
+      Statistic: Average
+      Threshold: 30
+      AlarmDescription: Alarm if CPU too low or metric disappears indicating instance is down
+      Period: 180
+      AlarmActions:
+        - !Ref StepScalingIn
+      Namespace: AWS/EC2
+      Dimensions:
+      - Name: AutoScalingGroupName
+        Value: !Ref Asg
+      ComparisonOperator: LessThanOrEqualToThreshold
+      MetricName: CPUUtilization
+
+  # scheduled action #
+  ScheduledActionUp:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref Asg
+      MaxSize: 1
+      MinSize: 1
+      Recurrence: 50 0 * * MON-FRI
+  ScheduledActionDown:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref Asg
+      MaxSize: 0
+      MinSize: 0
+      Recurrence: 10 10 * * MON-FRI
+
+
+  ##### code-deploy #####
+  EC2CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub ${AWS::StackName}-EC2-CodeDeploy
+      ComputePlatform: Server
+
+  EC2DeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      DeploymentGroupName: ec2
+      ApplicationName: !Ref EC2CodeDeployApplication
+      AutoScalingGroups:
+        - !Ref Asg
+      LoadBalancerInfo:
+        TargetGroupInfoList:
+          - Name: !GetAtt ApplicationLoadBalancerTargetGroup.TargetGroupName
+      DeploymentStyle:
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+        DeploymentType: IN_PLACE
+      DeploymentConfigName: CodeDeployDefault.OneAtATime
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      TriggerConfigurations:
+        - TriggerName: 'sns'
+          TriggerEvents:
+            - DeploymentStart
+            - DeploymentSuccess
+            - DeploymentFailure
+            - DeploymentStop
+          TriggerTargetArn: !Ref sns2mail
+
+  LambdaCodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub ${AWS::StackName}-Lambda-CodeDeploy
+      ComputePlatform: Lambda
+
+  LambdaDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      DeploymentGroupName: lambda
+      ApplicationName: !Ref LambdaCodeDeployApplication
+      DeploymentStyle:
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+        DeploymentType: BLUE_GREEN
+      DeploymentConfigName: CodeDeployDefault.LambdaAllAtOnce
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      TriggerConfigurations:
+        - TriggerName: 'sns'
+          TriggerEvents:
+            - DeploymentStart
+            - DeploymentSuccess
+            - DeploymentFailure
+            - DeploymentStop
+          TriggerTargetArn: !Ref sns2mail
+
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Action: sts:AssumeRole
+          Principal:
+            Service:
+            - codedeploy.amazonaws.com
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+
+
+
+  ##### travis-ci #####
+  TravisCI:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: travis-ci
+      Path: '/'
+      Policies:
+      - PolicyName: s3
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:AbortMultipartUpload
+            - s3:DeleteObject
+            - s3:GetObject
+            - s3:GetObjectAcl
+            - s3:PutObject
+            - s3:PutObjectAcl
+            Resource:
+            - !Sub 'arn:aws:s3:::${S3Bucket}/*'
+      - PolicyName: codedeploy
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+              - codedeploy:CreateDeployment
+              - codedeploy:GetApplicationRevision
+              - codedeploy:GetDeployment
+              - codedeploy:GetDeploymentConfig
+              - codedeploy:RegisterApplicationRevision
+            Resource:
+            - '*'
+      - PolicyName: deploy-lambda
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Sid: ListExistingRolesAndPolicies
+            Effect: Allow
+            Action:
+              - iam:ListRolePolicies
+              - iam:ListRoles
+            Resource: '*'
+          - Sid: CreateAndListFunctions
+            Effect: Allow
+            Action:
+              - lambda:CreateFunction
+              - lambda:ListFunctions
+              - lambda:TagResource
+            Resource: '*'
+          - Sid: DeployCode
+            Effect: Allow
+            Action:
+              - lambda:GetFunction
+              - lambda:UpdateFunctionCode
+              - lambda:UpdateFunctionConfiguration
+            Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:*
+          - Sid: SetRole
+            Effect: Allow
+            Action:
+            - iam:PassRole
+            Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/*
+          - Sid: SetVPCInfo
+            Effect: Allow
+            Action:
+              - ec2:DescribeSubnets
+              - ec2:DescribeVpcs
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeVpcs
+            Resource: '*'
+
+
+
+  ##### s3 for codedeploy #####
+  S3:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${S3Bucket}
+      LifecycleConfiguration:
+        Rules:
+        - ExpirationInDays: 730
+          Status: Enabled
+          AbortIncompleteMultipartUpload:
+            DaysAfterInitiation: 90
+
+
+  ##### sns #####
+  sns2mail:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: sns to mail
+      Subscription:
+      - Endpoint: !Sub ${SNSMail}
+        Protocol: EMAIL
+
+
+
+
+  ##### lambda #####
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: lambda html page
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs12.x
+      Timeout: 5
+      Tags:
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+      Code:
+        ZipFile: >-
+          'use strict';
+
+          exports.handler = function(event ,context ,callback){
+
+            let html = `<head>
+            <title>Welcome to AWS Lambda !</title>
+            <style>
+              html, body {
+                font-family: arial; color:red;
+                text-align: center;
+                margin-top: 30px;
+              }
+            </style>
+            </head>
+            <body>
+            <h1>Welcome to AWS Lambda ! , this is created by cloudformation</h1>
+            </body>
+            </html>`;
+
+            let response = {
+              statusCode: 200,
+              headers: {
+                'Content-Type': 'text/html; charset=UTF-8',
+              },
+              body: html,
+            };
+
+            callback(null, response);
+          }
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: !Sub CreatedBy cfn-${AWS::StackName} ,lambda execution role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        -
+          PolicyName: dynamodb
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:BatchGetItem
+                  - dynamodb:DeleteGetItem
+                  - dynamodb:Query
+                Resource: '*'
+      Tags:
+        - Key: CreatedBy
+          Value: !Sub cfn-${AWS::StackName}
+
+  ElbInvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: elasticloadbalancing.amazonaws.com
+
+  LambdaTargateGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: false
+      TargetType: lambda
+      Targets:
+        - Id: !GetAtt LambdaFunction.Arn
+      Tags:
+        - Key: CreatedBy
+          Value: !Sub 'cfn-${AWS::StackName}'
+
+
+
+
+Outputs:
+  BastionEC2PublicIp:
+    Condition: BastionCond
+    Value: !GetAtt BastionEC2.PublicIp
+    Export:
+      Name: !Sub ${AWS::StackName}-BastionEC2-PublicIp
+
+  BastionEC2PrivateIp:
+    Condition: BastionCond
+    Value: !GetAtt BastionEC2.PrivateIp
+    Export:
+      Name: !Sub ${AWS::StackName}-BastionEC2-PrivateIp
+
+  ALBUrl:
+    Value: !Sub http://${ApplicationLoadBalancer.DNSName}
+    Export:
+      Name: !Sub ${AWS::StackName}-ALB-URL
